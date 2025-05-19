@@ -45,7 +45,7 @@ def main():
         )
 
 
-    tb_logger = TensorBoardLogger(save_dir="/mnt/DataCenter1/jinming_xu/data_ecodepth/pl_output", name="training")
+    tb_logger = TensorBoardLogger(save_dir="path/to/save/output", name="training")
     Path(f"{tb_logger.log_dir}/image").mkdir(exist_ok=True, parents=True)
     Path(f"{tb_logger.log_dir}/gt").mkdir(exist_ok=True, parents=True)
     Path(f"{tb_logger.log_dir}/stripe").mkdir(exist_ok=True, parents=True)

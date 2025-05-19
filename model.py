@@ -19,8 +19,8 @@ import os
 NUM_DECONV = 3
 NUM_FILTERS = [32, 32, 32]
 DECONV_KERNELS = [2, 2, 2]
-# VIT_MODEL = 'google/vit-base-patch16-224'
-VIT_MODEL = '/mnt/DataCenter1/jinming_xu/data_ecodepth/vit_model'
+VIT_MODEL = 'google/vit-base-patch16-224'
+# VIT_MODEL = 'path/to/your/vit_model'
 
 def pad_to_make_square(x):
     y = 255*((x+1)/2)

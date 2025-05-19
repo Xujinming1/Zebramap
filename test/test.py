@@ -21,7 +21,7 @@ model.load_state_dict(torch.load(args.ckpt_path, map_location="cpu", weights_onl
 
 model.load_state_dict(torch.load(args.wink_path, map_location="cpu", weights_only=False)["state_dict"], strict=False)
 
-tb_logger = TensorBoardLogger(save_dir="/mnt/DataCenter1/jinming_xu/hugespace/ecodepth/test_output", name="testing")
+tb_logger = TensorBoardLogger(save_dir="path/to/save/output", name="testing")
 Path(f"{tb_logger.log_dir}/image").mkdir(exist_ok=True, parents=True)
 Path(f"{tb_logger.log_dir}/gt").mkdir(exist_ok=True, parents=True)
 Path(f"{tb_logger.log_dir}/stripe").mkdir(exist_ok=True, parents=True)
