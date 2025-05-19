@@ -1,4 +1,0 @@
-kv1/NYUdata/NYU0003/image/NYU0003.jpg kv1/NYUdata/NYU0003/depth/NYU0003.png kv1/NYUdata/NYU0003/depth_bfx/NYU0003.png 
-kv1/NYUdata/NYU0015/image/NYU0015.jpg kv1/NYUdata/NYU0015/depth/NYU0015.png kv1/NYUdata/NYU0015/depth_bfx/NYU0015.png 
-kv1/NYUdata/NYU0086/image/NYU0086.jpg kv1/NYUdata/NYU0086/depth/NYU0086.png kv1/NYUdata/NYU0086/depth_bfx/NYU0086.png 
-kv1/NYUdata/NYU0157/image/NYU0157.jpg kv1/NYUdata/NYU0157/depth/NYU0157.png kv1/NYUdata/NYU0157/depth_bfx/NYU0157.png 

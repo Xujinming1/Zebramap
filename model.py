@@ -1,31 +1,26 @@
 import torch.nn as nn
 import torch
-from transformers import ViTImageProcessor, ViTForImageClassification, ViTConfig
+from transformers import ViTImageProcessor, ViTForImageClassification
 from timm.layers import trunc_normal_
 from omegaconf import OmegaConf
 from ldm.util import instantiate_from_config
 import torch.nn.functional as F
-from torch.fft import fft
 import torchvision.utils as vutils
 from einops import repeat
 import lightning as L
 from utils import pad, unpad, silog
 from optimizer import get_optimizer
 from metrics import compute_metrics
-from utils import eigen_crop, garg_crop, custom_crop, no_crop
+from utils import eigen_crop
 from dataset import DepthDataset
 from torch.utils.data import DataLoader
 import os
-import numpy as np
-import matplotlib
-import cv2
 
 NUM_DECONV = 3
 NUM_FILTERS = [32, 32, 32]
 DECONV_KERNELS = [2, 2, 2]
 # VIT_MODEL = 'google/vit-base-patch16-224'
 VIT_MODEL = '/mnt/DataCenter1/jinming_xu/data_ecodepth/vit_model'
-
 
 def pad_to_make_square(x):
     y = 255*((x+1)/2)
@@ -39,11 +34,10 @@ def pad_to_make_square(x):
         y = torch.cat([y, patch], axis=2)
     return y.to(torch.int)
 
-class PRN(nn.Module):
-    def __init__(self, recurrent_iter=5, use_GPU=True):
-        super(PRN, self).__init__()
+class StripeExtract(nn.Module):
+    def __init__(self, recurrent_iter=5):
+        super(StripeExtract, self).__init__()
         self.iteration = recurrent_iter
-        self.use_GPU = use_GPU
 
         n_channel = 3
         
@@ -124,7 +118,7 @@ class EmbeddingAdapter(nn.Module):
         texts = repeat(texts, 'n c -> n b c', b=1)
         return texts
 
-class EcoDepthEncoder(nn.Module):
+class Encoder(nn.Module):
     def __init__(
         self, 
         out_dim=1024, 
@@ -158,32 +152,20 @@ class EcoDepthEncoder(nn.Module):
         if train_from_scratch:
             self.apply(self._init_weights)
         
-        if args.method in [5, 6, 7, 9, 10, 11]:
-            self.cide_module = CIDE(args, emb_dim//2, train_from_scratch)
-            if args.indenco:
-                self.cide_module2 = CIDE(args, emb_dim//2, train_from_scratch)
-        else:
-            self.cide_module = CIDE(args, emb_dim, train_from_scratch)
+        self.image_feature = FeatureExtract(args, emb_dim//2, train_from_scratch)
+        self.stripe_feature = FeatureExtract(args, emb_dim//2, train_from_scratch)
         
         self.config = OmegaConf.load('../v1-inference.yaml')
-        if self.args.method == 3:
-            unet_config = self.config.model.params.unet_config2
-        else:
-            unet_config = self.config.model.params.unet_config
+        unet_config = self.config.model.params.unet_config
 
         first_stage_config = self.config.model.params.first_stage_config
         
-        if train_from_scratch:
-            if sd_path is None:
-                sd_path = '../../checkpoints/v1-5-pruned-emaonly.ckpt'
-            # unet_config.params.ckpt_path = sd_path
-        
         self.unet = instantiate_from_config(unet_config)
-        self.encoder_vq = instantiate_from_config(first_stage_config)
-        del self.encoder_vq.decoder
+        self.latent_encoder = instantiate_from_config(first_stage_config)
+        del self.latent_encoder.decoder
         del self.unet.out
 
-        for param in self.encoder_vq.parameters():
+        for param in self.latent_encoder.parameters():
             param.requires_grad = False
 
     def _init_weights(self, m):
@@ -191,53 +173,26 @@ class EcoDepthEncoder(nn.Module):
             trunc_normal_(m.weight, std=.02)
             nn.init.constant_(m.bias, 0)
 
-    def forward(self, x, stripe=None):
+    def forward(self, x, stripe):
         with torch.no_grad():
             # convert the input image to latent space and scale.
-            latents = self.encoder_vq.encode(x).mode().detach() * self.config.model.params.scale_factor
+            latents = self.latent_encoder.encode(x).mode().detach() * self.config.model.params.scale_factor
 
-        conditioning_scene_embedding = self.cide_module(x)
-
-        # print(x)
-        # print(stripe)
-        # exit(0)
-
-        if stripe is not None:            
-            # print('11')
-            # exit(0)
-            if self.args.method in [6, 7, 9, 10, 11]:
-                input = stripe
-            else:
-                input = stripe-x
-                input[input < -1] = -1
-                input[input > 1] = 1
-
-            if self.args.indenco:
-                conditioning_scene_embedding2 = self.cide_module2(input)
-            else:
-                conditioning_scene_embedding2 = self.cide_module(input)
-
-            if self.args.method in [3, 5, 6, 7, 9, 10, 11]:
-                conditioning_scene_embedding = torch.concat((conditioning_scene_embedding, conditioning_scene_embedding2), dim=2)
-            elif self.args.method == 4:
-                conditioning_scene_embedding = conditioning_scene_embedding2
+        conditioning_scene_embedding = self.image_feature(x)
+        conditioning_scene_embedding2 = self.stripe_feature(stripe)
 
         t = torch.ones((x.shape[0],), device=x.device).long()
-        outs = self.unet(latents, t, context=conditioning_scene_embedding)
+        outs = self.unet(latents, t, context=torch.concat((conditioning_scene_embedding, conditioning_scene_embedding2), dim=2))
 
         feats = [outs[0], outs[1], torch.cat([outs[2], F.interpolate(outs[3], scale_factor=2)], dim=1)]
         x = torch.cat([self.layer1(feats[0]), self.layer2(feats[1]), feats[2]], dim=1)
         return self.out_layer(x)
 
-class CIDE(nn.Module):
+class FeatureExtract(nn.Module):
     def __init__(self, args, emb_dim, train_from_scratch):
         super().__init__()
         self.args = args
         self.vit_processor = ViTImageProcessor.from_pretrained(VIT_MODEL, resume_download=True)
-        # if train_from_scratch:
-        #     vit_config = ViTConfig(num_labels=1000)
-        #     self.vit_model = ViTForImageClassification(vit_config)
-        # else:
         self.vit_model = ViTForImageClassification.from_pretrained(VIT_MODEL, resume_download=True)
 
         for param in self.vit_model.parameters():
@@ -272,7 +227,7 @@ class CIDE(nn.Module):
         
         return conditioning_scene_embedding
         
-class EcoDepth(L.LightningModule):
+class Zebramap(L.LightningModule):
     def __init__(self, args):
         super().__init__()
         self.max_depth = args.max_depth
@@ -283,44 +238,26 @@ class EcoDepth(L.LightningModule):
         channels_out = embed_dim
 
         self.save_hyperparameters()
-
-        if self.args.method == 1:
-            self.fuze = nn.Conv2d(embed_dim*2, embed_dim, 3, 1, 1)
-        elif self. args.method == 2:
-            self.fuze = nn.Conv2d(embed_dim*16, embed_dim*8, 3, 1, 1)
             
-        self.stripe = PRN(recurrent_iter=4)
+        self.stripe_extract = StripeExtract(recurrent_iter=4)
 
-        if args.winkfreeze:
-            for param in self.stripe.parameters():
-                param.requires_grad = False
+        for param in self.stripe_extract.parameters():
+            param.requires_grad = False
 
-        self.encoder = EcoDepthEncoder(out_dim=channels_in, args = args, train_from_scratch=args.train_from_scratch)
+        self.encoder = Encoder(out_dim=channels_in, args = args, train_from_scratch=args.train_from_scratch)
         self.decoder = Decoder(channels_in, channels_out, args)
+        
+        self.crop = eigen_crop
 
-        self.light_vector = (0, 0, 1)
-        
-        if args.eval_crop == "eigen":
-            self.eval_crop = eigen_crop
-        elif args.eval_crop == "garg":
-            self.eval_crop = garg_crop
-        elif args.eval_crop == "custom":
-            self.eval_crop = custom_crop
-        else:
-            self.eval_crop = no_crop
-        
-        # Only support finetuning for now
-        # assert not args.train_from_scratch
-        
         if args.train_from_scratch:
             self.decoder.init_weights()
 
-        self.last_layer_depth = nn.Sequential(
+        self.get_depth = nn.Sequential(
             nn.Conv2d(channels_out, channels_out, kernel_size=3, stride=1, padding=1),
             nn.ReLU(inplace=False),
             nn.Conv2d(channels_out, 1, kernel_size=3, stride=1, padding=1))
             
-        for m in self.last_layer_depth.modules():
+        for m in self.get_depth.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.normal_(m.weight, std=0.001)
                 if m.bias is not None:
@@ -330,7 +267,7 @@ class EcoDepth(L.LightningModule):
         self.mask[:, 0:3, :] = True
         self.mask[:, -3:, :] = True
 
-    def forward(self, x, s=None, normal=None):
+    def forward(self, x, s, normal=None):
         # x must be a pytorch tensor of shape (bs, 3, h, w)
         # and the each value ranges between [0, 1]
         _, _, h, _ = x.shape
@@ -338,71 +275,27 @@ class EcoDepth(L.LightningModule):
         kp = self.args.kp
         # kp = 20
 
-        if s is not None:
-            if not self.args.Onorm_module:
-                with torch.no_grad():
-                    x = self.stripe(s)
-                if self.args.method in [6, 7, 9, 10, 11]:
-                    # print(s)
-                    s = (s - x) / kp / torch.float_power(torch.abs(normal[:, 2, :, :]).unsqueeze(1), 0.45)
-                    # print(x)
-                    # print(torch.float_power(torch.abs(normal[:, 2, :, :]).unsqueeze(1), 0.45))
-                    # print(s)
-                    # exit(0)
-                    # vutils.save_image(s.data,
-                    #     os.path.join(self.logger.log_dir, 
-                    #                 "stripe", 
-                    #                 f"stripe.png"),
-                    #     normalize=False,
-                    #     nrow=4)
-                    s = torch.clamp(s, min=0, max=1.0)
-            if self.args.method == 11: 
-                s = s*2.0 - 1.0
-                s, padding = pad(s, 64)
+        if not self.args.Onorm_module:
+            with torch.no_grad():
+                x = self.stripe_extract(s)
+                s = (s - x) / kp / torch.float_power(torch.abs(normal[:, 2, :, :]).unsqueeze(1), 0.45)
+                s = torch.clamp(s, min=0, max=1.0)
 
-        x_destriped = x
+        image_nostripe = x
         x = torch.clamp(x, min=0, max=1.0)
         x = x*2.0 - 1.0  # normalize to [-1, 1]
         x, padding = pad(x, 64)
 
-        if self.args.method in [3, 4, 5, 6, 7, 9, 10, 11]:
-            conv_feats = self.encoder(x, s)
-        else:
-            conv_feats = self.encoder(x)
+        features = self.encoder(x, s)
 
-        if self.args.method == 2:
-            conv_feats2 = self.encoder(s)
-            conv_feats = self.fuze(torch.cat((conv_feats, conv_feats2), dim=1))
-
-        out = self.decoder([conv_feats])
+        out = self.decoder([features])
         out = unpad(out, padding)
 
-        if s is not None and self.args.method == 1:
-            conv_feats2 = self.encoder(s)
-            out2 = self.decoder([conv_feats2])
-            out2 = unpad(out2, padding)
-
-            out = self.fuze(torch.cat((out, out2), dim=1))
-
-        out_depth = self.last_layer_depth(out)            
-        pred = torch.sigmoid(out_depth) * self.max_depth
+        out_depth = self.get_depth(out)
+        pred_depth = torch.sigmoid(out_depth) * self.max_depth
         # pred is a pt of shape (bs, 1, h, w)
         # where each value ranges between [0, self.max_depth]
-        return pred, x_destriped
-    
-    def mse(self, pred, gt):
-        if self.args.use_stripe and not self.args.winkfreeze:
-            loss_spatial = F.mse_loss(pred, gt)
-
-            dim = -2
-            freq_gt = torch.abs(fft(gt, dim=dim)).masked_fill_(self.mask, value=0)
-            freq_predict = torch.abs(fft(pred, dim=dim)).masked_fill_(self.mask, value=0)
-            loss_freq = F.mse_loss(freq_gt, freq_predict) * 1.0
-
-            return loss_freq + loss_spatial * 1000
-        
-        else:
-            return 0
+        return pred_depth, image_nostripe
 
     def train_dataloader(self):
         train_dataset = DepthDataset(
@@ -424,52 +317,50 @@ class EcoDepth(L.LightningModule):
         )
         return DataLoader(val_dataset, num_workers=self.args.num_workers)
     
+    def test_dataloader(self):
+        test_dataset = DepthDataset(
+            args=self.args, 
+            is_train=False, 
+            filenames_path=self.args.test_filenames_path, 
+            data_path=self.args.test_data_path, 
+            depth_factor=self.args.test_depth_factor
+        )
+        return DataLoader(test_dataset, num_workers=self.args.num_workers)
+    
     def training_step(self, batch, batch_idx):
-        image, depth = batch["image"], batch["depth"]
+        image, depth, stripe = batch["image"], batch["depth"], batch['stripe']
 
-        if self.args.use_stripe:
-            stripe = batch["stripe"]
-        else:
-            stripe = None
+        prediction, _= self(image, stripe)
 
-        pred, destriped = self(image, stripe)
-        loss = silog(pred, depth) + self.mse(destriped, image)
+        loss = silog(prediction, depth)
 
         self.log(f"train_loss", loss)
         return loss
     
     def _shared_eval_step(self, batch, batch_idx, prefix):
         with torch.no_grad():
-            image, depth = batch["image"], batch["depth"]
+            image, depth, stripe = batch["image"], batch["depth"], batch["stripe"]
 
-            if self.args.use_stripe:
-                stripe = batch["stripe"]
-                stripe_concat = torch.cat([stripe, stripe.flip(-1)])
-                if self.args.realsense and self.args.method >= 7:
-                    normal = batch['normal']
-                    normal_concat = torch.cat([normal, normal.flip(-1)])
-                else:
-                    normal = None
-                    normal_concat = None
+            if not self.args.Onorm_module:
+                normal = batch['normal']
+                normal_concat = torch.cat([normal, normal.flip(-1)])
             else:
-                stripe = None
-                stripe_concat = None
                 normal = None
                 normal_concat = None
 
             image_concat = torch.cat([image, image.flip(-1)])
+            stripe_concat = torch.cat([stripe, stripe.flip(-1)])
             pred_concat, destriped = self(image_concat, stripe_concat, normal_concat)
             pred = ((pred_concat[0] + pred_concat[1].flip(-1))/2).unsqueeze(0)
 
-            if self.args.use_stripe:
-                destriped = ((destriped[0] + destriped[1].flip(-1))/2).unsqueeze(0)
+            destriped = ((destriped[0] + destriped[1].flip(-1))/2).unsqueeze(0)
             
             if depth.shape[-2:] != pred.shape[-2:] :
                 pred = torch.nn.functional.interpolate(pred, depth.shape[-2:], mode='bilinear', align_corners=True)
 
-            depth = self.eval_crop(depth)
+            depth = self.crop(depth)
 
-            loss = silog(pred, depth) + self.mse(destriped, image)
+            loss = silog(pred, depth)
 
             metrics = compute_metrics(pred, depth, self.args)
 
@@ -478,11 +369,6 @@ class EcoDepth(L.LightningModule):
 
             self.log(f"{prefix}_loss", loss, sync_dist=True)
             self.log_dict(metrics)
-
-            if 'd1' in metrics.keys():
-                if np.isnan(metrics['d1'].item()) and prefix == 'test':
-                    print('ji')
-                    exit(0)
 
             torch.cuda.empty_cache()
             return None
@@ -496,74 +382,30 @@ class EcoDepth(L.LightningModule):
             for idx, batch in enumerate(show_dataloader):
                 if idx >= num:
                     break
-                image, depth = batch['image'], batch['depth']
+                image, depth, stripe = batch['image'], batch['depth'], batch['stripe']
                 images.append(image)
                 depths.append(depth)
+                stripes.append(stripe)
+                
                 image = image.to(self.device)
-                # depth = depth.to(self.device)
+                stripe = stripe.to(self.device)
 
-                if self.args.use_stripe:
-                    stripe = batch['stripe']
-                    stripes.append(stripe)
-                    stripe = stripe.to(self.device)
-                    if self.args.realsense and self.args.method >= 7:
-                        normal = batch['normal']
-                        normal = normal.to(self.device)
-                    else:
-                        normal = None
+                if not self.args.Onorm_module:
+                    normal = batch['normal']
+                    normal = normal.to(self.device)
                 else:
-                    stripe = None
                     normal = None
 
                 pred, destripe = self(image, stripe, normal)
 
                 preds.append(pred)
-                
-                if self.args.use_stripe:
-                    destripes.append(destripe)
-
-                # cmap = matplotlib.colormaps.get_cmap('Spectral_r')
-                # # gt_norm = gt_norm.squeeze(0).squeeze(0)
-                # # print(shape)
-                # # print(pred[0,0].shape)
-                # # depth = depth[45:471, 41:601]
-                # print(depth.device)
-                # print(pred.device)
-                # if depth.shape[-2:] != pred.shape[-2:] :
-                #     pred = torch.nn.functional.interpolate(pred, depth.shape[-2:], mode='bilinear', align_corners=True)
-                # depth = self.eval_crop(depth)
-                # metrics = compute_metrics(pred, depth, self.args)
-                # MIN_DEPTH_EVAL = 1e-3
-                # pred[pred > self.args.max_depth] = self.args.max_depth
-                # pred[pred < MIN_DEPTH_EVAL] = MIN_DEPTH_EVAL
-                # valid_mask = torch.logical_and(depth > MIN_DEPTH_EVAL, depth < self.args.max_depth)
-                # evalmask = torch.zeros(depth.shape[-2:]).to(self.device)
-                # evalmask[45:471, 41:601] = 1
-                # valid_mask = torch.logical_and(valid_mask, evalmask)
-                # depth = (depth - depth[valid_mask].min()) / (depth[valid_mask].max() - depth[valid_mask].min()) * 255
-                # depth = depth[0, 0].detach().cpu().numpy().astype(np.uint8)
-                # depth = (cmap(depth)[:, :, :3] * 255)[:, :, ::-1].astype(np.uint8)
-                # cv2.imwrite(os.path.join(self.logger.log_dir, 
-                #                     "gt", 
-                #                     f"gt{idx}-{metrics['d1']}-{metrics['rmse']}.png"), depth[45:471, 41:601])
-                # # print(pred.shape)
-                # pred = (pred- pred[valid_mask].min()) / (pred[valid_mask].max() - pred[valid_mask].min()) * 255
-                # pred = pred[0, 0].detach().cpu().numpy().astype(np.uint8)
-                # # pred = cv2.resize(pred, shape)
-                # pred = (cmap(pred)[:, :, :3] * 255)[:, :, ::-1].astype(np.uint8)
-                # cv2.imwrite(os.path.join(self.logger.log_dir, 
-                #                     "prediction", 
-                #                     f"pred{idx}-{metrics['d1']}-{metrics['rmse']}.png"), pred[45:471, 41:601])
-                    
+                destripes.append(destripe)
 
             images = torch.stack(images[:num]).squeeze(1)
             depths = torch.stack(depths[:num]).squeeze(1)
             preds = torch.stack(preds[:num]).squeeze(1)
-            if self.args.use_stripe:
-                stripes = torch.stack(stripes[:num]).squeeze(1)
-                destripes = torch.stack(destripes[:num]).squeeze(1)
-            else:
-                stripes = None
+            stripes = torch.stack(stripes[:num]).squeeze(1)
+            destripes = torch.stack(destripes[:num]).squeeze(1)
 
             vutils.save_image(images.data,
                         os.path.join(self.logger.log_dir, 
@@ -589,20 +431,19 @@ class EcoDepth(L.LightningModule):
                             normalize=True,
                             nrow=4)
             
-            if self.args.use_stripe:
-                vutils.save_image(stripes.data,
+            vutils.save_image(stripes.data,
+                        os.path.join(self.logger.log_dir, 
+                                    "stripe", 
+                                    f"stripe.png"),
+                        normalize=False,
+                        nrow=4)
+            
+            vutils.save_image(destripes.data,
                             os.path.join(self.logger.log_dir, 
-                                        "stripe", 
-                                        f"stripe.png"),
-                            normalize=False,
+                                        "destriped", 
+                                        f"destriped{self.global_step}.png"),
+                            normalize=True,
                             nrow=4)
-                
-                vutils.save_image(destripes.data,
-                                os.path.join(self.logger.log_dir, 
-                                            "destriped", 
-                                            f"destriped{self.global_step}.png"),
-                                normalize=True,
-                                nrow=4)
                 
 
     def validation_step(self, batch, batch_idx):
@@ -613,7 +454,6 @@ class EcoDepth(L.LightningModule):
     
     def test_step(self, batch, batch_idx):
         return self._shared_eval_step(batch, batch_idx, "test")
-        # return
     
     def on_test_end(self):
         measure_name = ['silog', 'abs_rel', 'log10', 'rmse', 'sq_rel', 'rmse_log', 'd1', 'd2', 'd3']

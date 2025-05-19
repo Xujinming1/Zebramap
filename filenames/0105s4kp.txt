@@ -1,8 +1,0 @@
-Second4/image_1736061827258.jpg Second4/depth_1736061827258.png Second4/stripe_1736061827258.jpg 
-Second4/image_1736061805816.jpg Second4/depth_1736061805816.png Second4/stripe_1736061805816.jpg 
-Second4/image_1736061805115.jpg Second4/depth_1736061805115.png Second4/stripe_1736061805115.jpg 
-Second4/image_1736061831193.jpg Second4/depth_1736061831193.png Second4/stripe_1736061831193.jpg 
-Second4/image_1736061822157.jpg Second4/depth_1736061822157.png Second4/stripe_1736061822157.jpg 
-Second4/image_1736061820956.jpg Second4/depth_1736061820956.png Second4/stripe_1736061820956.jpg 
-Second4/image_1736061804115.jpg Second4/depth_1736061804115.png Second4/stripe_1736061804115.jpg 
-Second4/image_1736061805249.jpg Second4/depth_1736061805249.png Second4/stripe_1736061805249.jpg 

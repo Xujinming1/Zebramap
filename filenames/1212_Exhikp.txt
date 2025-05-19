@@ -1,6 +1,0 @@
-Exhi/image_1734000009511.jpg Exhi/depth_1734000009511.png Exhi/stripe_1734000009511.jpg 
-Exhi/image_1733999944416.jpg Exhi/depth_1733999944416.png Exhi/stripe_1733999944416.jpg 
-Exhi/image_1733999984700.jpg Exhi/depth_1733999984700.png Exhi/stripe_1733999984700.jpg 
-Exhi/image_1733999974896.jpg Exhi/depth_1733999974896.png Exhi/stripe_1733999974896.jpg 
-Exhi/image_1733999984099.jpg Exhi/depth_1733999984099.png Exhi/stripe_1733999984099.jpg 
-Exhi/image_1734000041258.jpg Exhi/depth_1734000041258.png Exhi/stripe_1734000041258.jpg 

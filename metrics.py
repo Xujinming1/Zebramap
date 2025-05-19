@@ -1,5 +1,4 @@
 import torch
-import numpy as np
 
 MIN_DEPTH_EVAL = 1e-3
 

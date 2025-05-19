@@ -1,15 +1,12 @@
 import sys
 sys.path.append("..")
-from dataset import DepthDataset
 import json
-from torch.utils.data import DataLoader
-from model import EcoDepth
+from model import Zebramap
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 from pathlib import Path
 import torch
-from utils import download_model
 
 
 class Args:
@@ -22,34 +19,9 @@ class Args:
 def main():
     args = Args()
 
-    model = EcoDepth(args)
-
-    # if args.ckpt_path == "":
-    #     model_str = f"weights_{args.scene}.ckpt"
-    #     download_model(model_str)
-    #     args.ckpt_path = f"../checkpoints/{model_str}"
+    model = Zebramap(args)
 
     model.load_state_dict(torch.load(args.ckpt_path, map_location="cpu", weights_only=True)["state_dict"], strict=False)
-
-    train_dataset = DepthDataset(
-        args=args, 
-        is_train=True, 
-        filenames_path=args.train_filenames_path, 
-        data_path=args.train_data_path, 
-        depth_factor=args.train_depth_factor
-    )
-
-    train_loader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=args.batch_size)
-
-    val_dataset = DepthDataset(
-        args=args, 
-        is_train=False, 
-        filenames_path=args.val_filenames_path, 
-        data_path=args.val_data_path, 
-        depth_factor=args.val_depth_factor
-    )
-
-    val_loader = DataLoader(val_dataset, num_workers=args.num_workers)
 
     checkpoint_callback = ModelCheckpoint(
             save_top_k=1,
@@ -85,8 +57,7 @@ def main():
         val_check_interval=args.val_check_interval,
         callbacks=[checkpoint_callback, checkpoint_last, checkpoint_d1],
         logger=tb_logger,
-        # strategy="",
-        devices=[0]
+        devices=[args.gpu]
     )
 
     trainer.fit(

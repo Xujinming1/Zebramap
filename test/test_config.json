@@ -1,7 +1,7 @@
 {
-    "test_data_path" : "/mnt/DataCenter1/jinming_xu/diode/val/indoors",
-    "test_filenames_path" : "../filenames/diode.txt",
-    "rough_path" : "/mnt/DataCenter1/jinming_xu/hugespace/inverse/DIODE_cascade2/results_brdf2_brdf3",
+    "test_data_path" : "/mnt/DataCenter1/jinming_xu/data_newcrfs/official_splits/test",
+    "test_filenames_path" : "../filenames/nyu_depth_v2/test_list.txt",
+    "normal_path" : "/mnt/DataCenter1/jinming_xu/hugespace/inverse/NYU_cascade2/results_brdf2_brdf3",
     "stripes_path" : "/mnt/DataCenter1/jinming_xu/data_newcrfs/stripes3.npy",
     "realnormal_path" : "/mnt/DataCenter1/jinming_xu/hugespace/metric/0105/aligned/vis/aligned",
     "ckpt_path" : "/mnt/DataCenter1/jinming_xu/data_ecodepth/pl_output/training/version_17/checkpoints/epoch=30-step=122290.ckpt",
@@ -13,18 +13,8 @@
     "num_workers" : 1,
     "max_depth" : 10.0,
     "no_of_classes" : 100,
-    "use_cut_depth" : false,
-    "do_random_crop" : false,
     "train_from_scratch" : false,
-    "eval_crop" : "eigen",
-    "method" : 7,
     "kp" : 0.0001,
     "Onorm_module" : true,
-    "use_stripe" : true,
-    "use_rough" : true,
-    "realsense" : false,
-    "realkp" : false,
-    "winkfreeze" : true,
-    "gpu" : 1,
-    "indenco": true
+    "gpu" : 1
 }

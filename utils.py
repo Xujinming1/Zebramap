@@ -75,20 +75,6 @@ def eigen_crop(depth):
     depth[valid_mask == 0] = 0
     return depth
 
-def garg_crop(depth):
-    h, w = depth.shape[-2:]
-    valid_mask = torch.zeros_like(depth)
-    valid_mask[..., int(0.40810811 * h):int(0.99189189 * h),
-        int(0.03594771 * w):int(0.96405229 * w)] = 1
-    depth[valid_mask == 0] = 0
-    return depth
-
-def custom_crop(depth):
-    raise NotImplementedError
-
-def no_crop(depth):
-    return depth
-
 class MyProgressBar():
     def __init__(self):
         self.pbar = None
